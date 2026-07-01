@@ -61,7 +61,6 @@ def main() -> None:
     print("  WP Synchro")
     print(f"  Config : {config_path}")
     print(f"  UI     : http://{args.host}:{args.port}")
-    print("  NOTE   : VPN must be active for old-server access")
     print("=" * 60)
     print()
 

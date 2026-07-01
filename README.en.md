@@ -88,7 +88,7 @@ Open [http://127.0.0.1:8765](http://127.0.0.1:8765).
 ### File sync (Motor A)
 
 1. `find` lists all files on both servers with size + mtime (~4 s even for 25 k files)
-2. Delta is computed locally — no rsync dry-run over a slow VPN
+2. Delta is computed locally
 3. On confirm: rsync downloads only the changed files old → Mac staging, then uploads to new server
 4. The old server is never written to
 

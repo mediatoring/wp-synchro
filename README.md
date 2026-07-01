@@ -88,7 +88,7 @@ Otevři [http://127.0.0.1:8765](http://127.0.0.1:8765).
 ### Sync souborů (Motor A)
 
 1. `find` vypíše soubory na obou serverech s velikostí a mtime (~4 s i pro 25 tis. souborů)
-2. Delta se spočítá lokálně — žádný rsync dry-run přes pomalé VPN
+2. Delta se spočítá lokálně
 3. Po potvrzení: rsync stáhne jen změněné soubory starý → Mac staging, pak je nahraje na nový server
 4. Na starý server se nikdy nezapisuje
 
