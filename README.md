@@ -1,34 +1,34 @@
 # WP Synchro
 
-> Incremental WordPress-to-WordPress sync with a local web UI.  
-> Transfers files and database content from an old server to a new one — safely, with full control.
+> Přírůstkový WordPress-to-WordPress sync s lokálním webovým rozhraním.  
+> Přenáší soubory a obsah databáze ze starého serveru na nový — bezpečně a s plnou kontrolou.
 
-Built by [Mediatoring.com](https://mediatoring.cz) · [Česky / Czech version](README.cs.md)
+Vytvořil [Mediatoring.com](https://mediatoring.cz) · [English version](README.en.md)
 
 ---
 
-## What it does
+## Co to dělá
 
-WP Synchro keeps two WordPress installations in sync — useful for migrations, staging-to-production workflows, or ongoing content mirroring.
+WP Synchro udržuje dvě WordPress instalace synchronizované — hodí se pro migrace, staging-to-production workflow nebo průběžné zrcadlení obsahu.
 
-| Feature | Details |
+| Funkce | Popis |
 |---|---|
-| **Motor A — Files** | Syncs `wp-content/uploads` and custom dirs via Mac as relay (old → Mac → new) |
-| **Motor B — Content** | Syncs posts, pages, CPTs via WP-CLI; preserves IDs and Polylang language data |
-| **Delta preview** | Shows exactly what will change before you confirm |
-| **Live progress** | Background jobs with real-time log streaming in the browser |
-| **Read-only source** | Old server is never written to — enforced at code level |
-| **Multi-profile** | One tool, multiple sites — each site gets its own YAML config |
+| **Motor A — Soubory** | Synchronizuje `wp-content/uploads` a další adresáře přes Mac jako mezičlánek (starý → Mac → nový) |
+| **Motor B — Obsah** | Synchronizuje posty, stránky a CPT přes WP-CLI; zachovává ID a jazyková přiřazení Polylangu |
+| **Delta preview** | Ukáže přesně co se změní, než potvrdíte |
+| **Live progress** | Úlohy na pozadí s real-time streamováním logů v prohlížeči |
+| **Starý server jen ke čtení** | Na starý server se nikdy nezapisuje — vynuceno na úrovni kódu |
+| **Multi-profil** | Jeden nástroj, více webů — každý web má vlastní YAML config |
 
-## Requirements
+## Požadavky
 
 - Python 3.11+
-- `rsync` and `ssh` in PATH on the Mac
-- SSH key-based access to both servers (no password prompts)
-- WP-CLI available on both servers
-- The Mac running this tool must be able to reach both servers via SSH
+- `rsync` a `ssh` v PATH na Macu
+- SSH přístup na oba servery pomocí klíčů (bez hesel)
+- WP-CLI dostupné na obou serverech
+- Mac musí být schopen připojit se na oba servery přes SSH
 
-## Installation
+## Instalace
 
 ```bash
 git clone https://github.com/mediatoring/wp-synchro.git
@@ -38,28 +38,28 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Setup
+## Nastavení
 
-1. Copy the example config:
+1. Zkopíruj ukázkový config:
 
 ```bash
-cp configs/example.yaml configs/mysite.yaml
+cp configs/example.yaml configs/mojeweb.yaml
 ```
 
-2. Edit `configs/mysite.yaml` — fill in SSH hosts, paths, and WP-CLI location:
+2. Uprav `configs/mojeweb.yaml` — vyplň SSH hosty, cesty a umístění WP-CLI:
 
 ```yaml
 old_server:
-  ssh_host: "user@old-server.example.com"
-  ssh_key: "~/.ssh/id_rsa_oldserver"   # omit to use ssh-agent
+  ssh_host: "uzivatel@stary-server.example.com"
+  ssh_key: "~/.ssh/id_rsa_staryserver"   # vynech pro použití ssh-agent
   wp_root: "/var/www/html/wordpress"
   php_binary: "/usr/bin/php"
   wpcli_path: "~/wp.phar"
   table_prefix: "wp_"
 
 new_server:
-  ssh_host: "user@new-server.example.com"
-  ssh_key: "~/.ssh/id_ed25519_newserver"
+  ssh_host: "uzivatel@novy-server.example.com"
+  ssh_key: "~/.ssh/id_ed25519_novyserver"
   wp_root: "~/public_html"
   wpcli_binary: "wp"
 
@@ -68,55 +68,55 @@ sync_dirs:
     dest: "wp-content/uploads"
 ```
 
-3. Verify SSH works without password prompts:
+3. Ověř, že SSH funguje bez hesla:
 
 ```bash
-ssh -i ~/.ssh/id_rsa_oldserver user@old-server.example.com "echo ok"
-ssh -i ~/.ssh/id_ed25519_newserver user@new-server.example.com "wp --info --skip-themes"
+ssh -i ~/.ssh/id_rsa_staryserver uzivatel@stary-server.example.com "echo ok"
+ssh -i ~/.ssh/id_ed25519_novyserver uzivatel@novy-server.example.com "wp --info --skip-themes"
 ```
 
-## Run
+## Spuštění
 
 ```bash
-WP_SYNCHRO_CONFIG=configs/mysite.yaml python run.py --port 8765
+WP_SYNCHRO_CONFIG=configs/mojeweb.yaml python run.py --port 8765
 ```
 
-Open [http://127.0.0.1:8765](http://127.0.0.1:8765).
+Otevři [http://127.0.0.1:8765](http://127.0.0.1:8765).
 
-## How it works
+## Jak to funguje
 
-### File sync (Motor A)
+### Sync souborů (Motor A)
 
-1. `find` lists all files on both servers with size + mtime (~4 s even for 25 k files)
-2. Delta is computed locally — no rsync dry-run over a slow VPN
-3. On confirm: rsync downloads only the changed files old → Mac staging, then uploads to new server
-4. The old server is never written to
+1. `find` vypíše soubory na obou serverech s velikostí a mtime (~4 s i pro 25 tis. souborů)
+2. Delta se spočítá lokálně — žádný rsync dry-run přes pomalé VPN
+3. Po potvrzení: rsync stáhne jen změněné soubory starý → Mac staging, pak je nahraje na nový server
+4. Na starý server se nikdy nezapisuje
 
-### Content sync (Motor B)
+### Sync obsahu (Motor B)
 
-1. WP-CLI `post list` on both servers, compare `post_modified`
-2. UI shows new / modified / deleted posts per post type
-3. On confirm: posts created or updated on new server via WP-CLI
-4. Polylang language assignments and translation groups are preserved
+1. WP-CLI `post list` na obou serverech, porovnání `post_modified`
+2. UI ukáže nové / změněné / smazané posty podle typu
+3. Po potvrzení: posty vytvoří nebo aktualizuje na novém serveru přes WP-CLI
+4. Jazyková přiřazení Polylangu a skupiny překladů jsou zachovány
 
-### Safety
+### Bezpečnost
 
-- Old server SSH wrapper has a read-only allowlist — any write attempt raises `SecurityError`
-- Deletions require a DB backup to be taken first
-- Mirror deletion (sync deletes) is opt-in with a second confirmation
+- SSH wrapper starého serveru má allowlist čtecích příkazů — jakýkoli pokus o zápis vyhodí `SecurityError`
+- Mazání vyžaduje předchozí zálohu DB
+- Zrcadlové mazání (sync deletes) je opt-in s druhým potvrzením
 
-## State & logs
+## Stav a logy
 
-SQLite database at `~/.wp-synchro/<profile>/state.db`. Browse in the **Logs** tab or directly:
+SQLite databáze na `~/.wp-synchro/<profil>/state.db`. Procházet v záložce **Logy** nebo přímo:
 
 ```bash
-sqlite3 ~/.wp-synchro/mysite/state.db "SELECT * FROM jobs ORDER BY id DESC LIMIT 20;"
+sqlite3 ~/.wp-synchro/mojeweb/state.db "SELECT * FROM jobs ORDER BY id DESC LIMIT 20;"
 ```
 
-## License
+## Licence
 
 MIT
 
 ---
 
-*WP Synchro is developed and maintained by [Mediatoring.com s.r.o.](https://mediatoring.cz)*
+*WP Synchro vytvořil a spravuje [Mediatoring.com s.r.o.](https://mediatoring.cz)*
