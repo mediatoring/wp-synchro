@@ -293,7 +293,7 @@ class MotorA:
         staged_count = out1.count("\n") + (1 if out1 else 0)
         self.db.log(job_id, f"Fáze 1 hotová: {staged_count} souborů staženo lokálně", "INFO")
 
-        # Phase 2: upload staged files Mac → new server
+        # Phase 2: upload staged files local staging → new server
         cmd2 = [
             "rsync", "-az", "--files-from", str(filelist_path),
             "--out-format=%i %l %n",
