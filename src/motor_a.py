@@ -4,7 +4,7 @@ Motor A — File synchronization engine.
 Strategy:
   1. Use rsync --dry-run to compute delta (new / changed / deleted files).
   2. Show delta in UI and wait for confirmation.
-  3. On confirm: relay files through the Mac as proxy (old→Mac temp dir→new).
+  3. On confirm: relay files through the local machine as proxy (old→local temp dir→new).
      Direct server↔server transfer is assumed to be unavailable.
 
 Old server is read-only — rsync only reads from it, never writes.
@@ -227,7 +227,7 @@ class MotorA:
             deltas.append(delta)
         return deltas
 
-    # -- Sync (two-hop via Mac) -----------------------------------------------
+    # -- Sync (two-hop via local machine) ------------------------------------
 
     def sync_files(
         self,
@@ -238,8 +238,8 @@ class MotorA:
         """
         Execute file sync for one sync_dir using delta-based --files-from approach.
         Only transfers files that are actually new or modified (from compute_delta).
-        Phase 1: rsync only the delta files from old server → Mac staging dir
-        Phase 2: rsync those same files from Mac → new server
+        Phase 1: rsync only the delta files from old server → local staging dir
+        Phase 2: rsync those same files from local staging → new server
         """
         sd = self.cfg.sync_dirs[sync_dir_index]
         old_src = f"{self.old.ssh_host}:{self.old._cfg.wp_root}/{sd.source}/"
@@ -277,13 +277,13 @@ class MotorA:
         ssh_old = _build_old_ssh_opts(self.old)
         ssh_new = _build_new_ssh_opts(self.new)
 
-        # Phase 1: download only delta files from old server → Mac
+        # Phase 1: download only delta files from old server → local staging
         cmd1 = [
             "rsync", "-az", "--files-from", str(filelist_path),
             "--out-format=%i %l %n",
             "-e", ssh_old, old_src, local_stage + "/",
         ]
-        self.db.log(job_id, f"Fáze 1: stahuji {total} souborů ze starého serveru → Mac...", "INFO")
+        self.db.log(job_id, f"Fáze 1: stahuji {total} souborů ze starého serveru → lokálně...", "INFO")
         rc1, out1, err1 = _run_rsync_streaming(cmd1, job_id, self.db, log_every=10, timeout=1800)
         if rc1 not in (0, 24):
             msg = f"Fáze 1 selhala rc={rc1}: {err1[:300]}"
@@ -291,7 +291,7 @@ class MotorA:
             return {"error": msg, "phase": 1}
 
         staged_count = out1.count("\n") + (1 if out1 else 0)
-        self.db.log(job_id, f"Fáze 1 hotová: {staged_count} souborů staženo na Mac", "INFO")
+        self.db.log(job_id, f"Fáze 1 hotová: {staged_count} souborů staženo lokálně", "INFO")
 
         # Phase 2: upload staged files Mac → new server
         cmd2 = [
@@ -299,7 +299,7 @@ class MotorA:
             "--out-format=%i %l %n",
             "-e", ssh_new, local_stage + "/", new_dst,
         ]
-        self.db.log(job_id, f"Fáze 2: nahrávám {total} souborů z Mac → nový server...", "INFO")
+        self.db.log(job_id, f"Fáze 2: nahrávám {total} souborů lokálně → nový server...", "INFO")
         rc2, out2, err2 = _run_rsync_streaming(cmd2, job_id, self.db, log_every=10, timeout=1800)
         if rc2 not in (0, 24):
             msg = f"Fáze 2 selhala rc={rc2}: {err2[:300]}"
