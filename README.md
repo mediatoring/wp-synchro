@@ -13,7 +13,7 @@ WP Synchro udržuje dvě WordPress instalace synchronizované — hodí se pro m
 
 | Funkce | Popis |
 |---|---|
-| **Motor A — Soubory** | Synchronizuje `wp-content/uploads` a další adresáře přes Mac jako mezičlánek (starý → Mac → nový) |
+| **Motor A — Soubory** | Synchronizuje `wp-content/uploads` a další adresáře přes lokální počítač jako mezičlánek (starý → lokálně → nový) |
 | **Motor B — Obsah** | Synchronizuje posty, stránky a CPT přes WP-CLI; zachovává ID a jazyková přiřazení Polylangu |
 | **Delta preview** | Ukáže přesně co se změní, než potvrdíte |
 | **Live progress** | Úlohy na pozadí s real-time streamováním logů v prohlížeči |
@@ -23,10 +23,10 @@ WP Synchro udržuje dvě WordPress instalace synchronizované — hodí se pro m
 ## Požadavky
 
 - Python 3.11+
-- `rsync` a `ssh` v PATH na Macu
+- `rsync` a `ssh` v PATH
 - SSH přístup na oba servery pomocí klíčů (bez hesel)
-- WP-CLI dostupné na obou serverech
-- Mac musí být schopen připojit se na oba servery přes SSH
+- WP-CLI dostupné na obou serverech ve SSH shellu (`wp --info` musí fungovat)
+- Lokální počítač musí být schopen připojit se na oba servery přes SSH
 
 ## Instalace
 
@@ -51,16 +51,16 @@ cp configs/example.yaml configs/mojeweb.yaml
 ```yaml
 old_server:
   ssh_host: "uzivatel@stary-server.example.com"
-  ssh_key: "~/.ssh/id_rsa_staryserver"   # vynech pro použití ssh-agent
-  wp_root: "/var/www/html/wordpress"
+  ssh_key: "~/.ssh/klic"        # volitelné, vynech pro ssh-agent
+  wp_root: "/cesta/k/wordpress"
   php_binary: "/usr/bin/php"
-  wpcli_path: "~/wp.phar"
+  wpcli_path: "/cesta/k/wp.phar"  # nebo "wp" pokud je wp-cli v PATH
   table_prefix: "wp_"
 
 new_server:
   ssh_host: "uzivatel@novy-server.example.com"
-  ssh_key: "~/.ssh/id_ed25519_novyserver"
-  wp_root: "~/public_html"
+  ssh_key: "~/.ssh/klic"        # volitelné
+  wp_root: "/cesta/k/wordpress"
   wpcli_binary: "wp"
 
 sync_dirs:
@@ -68,11 +68,11 @@ sync_dirs:
     dest: "wp-content/uploads"
 ```
 
-3. Ověř, že SSH funguje bez hesla:
+3. Ověř SSH přístup a dostupnost WP-CLI:
 
 ```bash
-ssh -i ~/.ssh/id_rsa_staryserver uzivatel@stary-server.example.com "echo ok"
-ssh -i ~/.ssh/id_ed25519_novyserver uzivatel@novy-server.example.com "wp --info --skip-themes"
+ssh uzivatel@stary-server.example.com "echo ok"
+ssh uzivatel@novy-server.example.com "wp --info --skip-themes"
 ```
 
 ## Spuštění
@@ -89,7 +89,7 @@ Otevři [http://127.0.0.1:8765](http://127.0.0.1:8765).
 
 1. `find` vypíše soubory na obou serverech s velikostí a mtime (~4 s i pro 25 tis. souborů)
 2. Delta se spočítá lokálně
-3. Po potvrzení: rsync stáhne jen změněné soubory starý → Mac staging, pak je nahraje na nový server
+3. Po potvrzení: rsync stáhne jen změněné soubory ze starého serveru do lokálního staging adresáře, pak je nahraje na nový server
 4. Na starý server se nikdy nezapisuje
 
 ### Sync obsahu (Motor B)

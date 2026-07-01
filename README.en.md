@@ -13,7 +13,7 @@ WP Synchro keeps two WordPress installations in sync — useful for migrations, 
 
 | Feature | Details |
 |---|---|
-| **Motor A — Files** | Syncs `wp-content/uploads` and custom dirs via Mac as relay (old → Mac → new) |
+| **Motor A — Files** | Syncs `wp-content/uploads` and custom dirs via local machine as relay (old → local → new) |
 | **Motor B — Content** | Syncs posts, pages, CPTs via WP-CLI; preserves IDs and Polylang language data |
 | **Delta preview** | Shows exactly what will change before you confirm |
 | **Live progress** | Background jobs with real-time log streaming in the browser |
@@ -23,10 +23,10 @@ WP Synchro keeps two WordPress installations in sync — useful for migrations, 
 ## Requirements
 
 - Python 3.11+
-- `rsync` and `ssh` in PATH on the Mac
+- `rsync` and `ssh` in PATH
 - SSH key-based access to both servers (no password prompts)
-- WP-CLI available on both servers
-- The Mac running this tool must be able to reach both servers via SSH
+- WP-CLI available on both servers in the SSH shell (`wp --info` must work)
+- Local machine must be able to reach both servers via SSH
 
 ## Installation
 
@@ -51,16 +51,16 @@ cp configs/example.yaml configs/mysite.yaml
 ```yaml
 old_server:
   ssh_host: "user@old-server.example.com"
-  ssh_key: "~/.ssh/id_rsa_oldserver"   # omit to use ssh-agent
-  wp_root: "/var/www/html/wordpress"
+  ssh_key: "~/.ssh/keyfile"        # optional, omit to use ssh-agent
+  wp_root: "/path/to/wordpress"
   php_binary: "/usr/bin/php"
-  wpcli_path: "~/wp.phar"
+  wpcli_path: "/path/to/wp.phar"   # or "wp" if wp-cli is in PATH
   table_prefix: "wp_"
 
 new_server:
   ssh_host: "user@new-server.example.com"
-  ssh_key: "~/.ssh/id_ed25519_newserver"
-  wp_root: "~/public_html"
+  ssh_key: "~/.ssh/keyfile"        # optional
+  wp_root: "/path/to/wordpress"
   wpcli_binary: "wp"
 
 sync_dirs:
@@ -68,11 +68,11 @@ sync_dirs:
     dest: "wp-content/uploads"
 ```
 
-3. Verify SSH works without password prompts:
+3. Verify SSH access and WP-CLI availability:
 
 ```bash
-ssh -i ~/.ssh/id_rsa_oldserver user@old-server.example.com "echo ok"
-ssh -i ~/.ssh/id_ed25519_newserver user@new-server.example.com "wp --info --skip-themes"
+ssh user@old-server.example.com "echo ok"
+ssh user@new-server.example.com "wp --info --skip-themes"
 ```
 
 ## Run
@@ -89,7 +89,7 @@ Open [http://127.0.0.1:8765](http://127.0.0.1:8765).
 
 1. `find` lists all files on both servers with size + mtime (~4 s even for 25 k files)
 2. Delta is computed locally
-3. On confirm: rsync downloads only the changed files old → Mac staging, then uploads to new server
+3. On confirm: rsync downloads only the changed files from the old server to a local staging dir, then uploads them to the new server
 4. The old server is never written to
 
 ### Content sync (Motor B)
