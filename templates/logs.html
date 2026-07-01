@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-4">
+
+  <div class="col-12">
+    <div class="d-flex align-items-center gap-3">
+      <h4 class="mb-0">Logy &amp; Historie</h4>
+      <button class="btn btn-sm btn-outline-primary" onclick="loadLogs()">↻ Obnovit</button>
+      <a href="/logs/download" class="btn btn-sm btn-outline-secondary ms-auto">⬇ Stáhnout log</a>
+    </div>
+  </div>
+
+  <!-- Job filter -->
+  <div class="col-12" id="job-filter-section">
+    <div class="input-group" style="max-width:400px">
+      <span class="input-group-text">Job #</span>
+      <input type="number" class="form-control" id="job-id-input" placeholder="prázdné = vše">
+      <button class="btn btn-outline-secondary" onclick="loadJobLogs()">Filtrovat</button>
+    </div>
+  </div>
+
+  <!-- Log table -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between">
+        <strong id="log-title">Poslední záznamy</strong>
+        <span class="text-muted small" id="log-count"></span>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive" style="max-height:600px;overflow-y:auto">
+          <table class="table table-sm table-hover font-monospace mb-0" id="log-table">
+            <thead class="table-dark sticky-top">
+              <tr><th style="width:160px">Čas</th><th style="width:60px">Level</th><th style="width:120px">Job</th><th>Zpráva</th></tr>
+            </thead>
+            <tbody id="log-tbody">
+              <tr><td colspan="4" class="text-center text-muted py-4">Načítám...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Job detail (shown when filtering by job) -->
+  <div class="col-12" id="job-detail" style="display:none">
+    <div class="card border-info">
+      <div class="card-header bg-info text-white">Detail jobu</div>
+      <div class="card-body" id="job-detail-body"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function fmtTs(ts) {
+  if (!ts) return '—';
+  return new Date(ts * 1000).toLocaleString('cs', {
+    year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', second:'2-digit'
+  });
+}
+
+function levelBadge(level) {
+  const cls = level === 'ERROR' ? 'danger' : level === 'WARNING' ? 'warning text-dark' : 'secondary';
+  return `<span class="badge bg-${cls}">${level}</span>`;
+}
+
+async function loadLogs() {
+  const tbody = document.getElementById('log-tbody');
+  tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-4">⟳ Načítám...</td></tr>';
+  document.getElementById('job-detail').style.display = 'none';
+  document.getElementById('log-title').textContent = 'Poslední záznamy';
+  try {
+    const r = await fetch('/logs/recent');
+    const logs = await r.json();
+    renderLogs(logs);
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="4" class="text-danger">Chyba: ${e.message}</td></tr>`;
+  }
+}
+
+async function loadJobLogs() {
+  const jobId = document.getElementById('job-id-input').value.trim();
+  if (!jobId) { loadLogs(); return; }
+
+  const tbody = document.getElementById('log-tbody');
+  tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-4">⟳ Načítám...</td></tr>';
+  try {
+    const r = await fetch('/logs/job/' + jobId);
+    const data = await r.json();
+    if (!data.job) {
+      tbody.innerHTML = '<tr><td colspan="4" class="text-danger">Job nenalezen.</td></tr>';
+      return;
+    }
+    renderJobDetail(data.job);
+    renderLogs(data.logs, true);
+    document.getElementById('log-title').textContent = `Job #${jobId} — ${data.job.job_type} / ${data.job.mode}`;
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="4" class="text-danger">Chyba: ${e.message}</td></tr>`;
+  }
+}
+
+function renderLogs(logs, isJob) {
+  const tbody = document.getElementById('log-tbody');
+  const count = document.getElementById('log-count');
+  count.textContent = logs.length + ' záznamů';
+  if (!logs.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-4">Žádné záznamy.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = logs.map(l => {
+    const ts = fmtTs(l.ts);
+    const job = isJob ? '' : `<td class="small text-muted">${l.job_type||''}/${l.mode||''} #${l.job_id||''}</td>`;
+    const rowCls = l.level === 'ERROR' ? 'table-danger' : l.level === 'WARNING' ? 'table-warning' : '';
+    return `<tr class="${rowCls}">
+      <td class="small text-muted text-nowrap">${ts}</td>
+      <td>${levelBadge(l.level)}</td>
+      ${job || '<td class="small text-muted"></td>'}
+      <td class="small">${escHtml(l.message)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderJobDetail(job) {
+  const sec = document.getElementById('job-detail');
+  sec.style.display = '';
+  const dur = job.finished_at && job.started_at
+    ? ((job.finished_at - job.started_at).toFixed(1) + 's') : '—';
+  const statusCls = job.status === 'done' ? 'success' : job.status === 'error' ? 'danger' : 'primary';
+  document.getElementById('job-detail-body').innerHTML = `
+    <div class="row g-3">
+      <div class="col-auto"><strong>Typ:</strong> ${job.job_type}</div>
+      <div class="col-auto"><strong>Režim:</strong> ${job.mode}</div>
+      <div class="col-auto"><strong>Status:</strong> <span class="badge bg-${statusCls}">${job.status}</span></div>
+      <div class="col-auto"><strong>Spuštěno:</strong> ${fmtTs(job.started_at)}</div>
+      <div class="col-auto"><strong>Trvání:</strong> ${dur}</div>
+    </div>
+    ${job.summary ? `<div class="mt-2"><strong>Souhrn:</strong> <code>${JSON.stringify(job.summary)}</code></div>` : ''}
+    ${job.error_msg ? `<div class="alert alert-danger mt-2 mb-0">${escHtml(job.error_msg)}</div>` : ''}
+  `;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Check URL for ?job_id= param
+const urlParams = new URLSearchParams(window.location.search);
+const jobFromUrl = urlParams.get('job_id');
+if (jobFromUrl) {
+  document.getElementById('job-id-input').value = jobFromUrl;
+  loadJobLogs();
+} else {
+  loadLogs();
+}
+</script>
+{% endblock %}

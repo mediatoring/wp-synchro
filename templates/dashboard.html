@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-4">
+
+  <!-- Server status cards -->
+  <div class="col-12">
+    <div class="d-flex align-items-center gap-3 mb-2">
+      <h4 class="mb-0">Stav připojení</h4>
+      <button class="btn btn-sm btn-outline-primary" onclick="testConnections()">
+        ↻ Otestovat připojení
+      </button>
+    </div>
+  </div>
+
+  <div class="col-md-6">
+    <div class="card h-100" id="card-old">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Starý server (zdrojový — jen čtení)</strong>
+        <span class="badge bg-secondary" id="old-status-badge">?</span>
+      </div>
+      <div class="card-body">
+        <div class="mb-1 text-muted small">{{ cfg.old_server.ssh_host }}</div>
+        <div class="mb-1 text-muted small">WP root: {{ cfg.old_server.wp_root }}</div>
+        <div class="mb-1 text-muted small">PHP: {{ cfg.old_server.php_binary }}</div>
+        <div id="old-wp-ver" class="text-muted small">WP-CLI: —</div>
+        <div id="old-msg" class="mt-2 small text-muted"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-6">
+    <div class="card h-100" id="card-new">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Nový server (cílový)</strong>
+        <span class="badge bg-secondary" id="new-status-badge">?</span>
+      </div>
+      <div class="card-body">
+        <div class="mb-1 text-muted small">{{ cfg.new_server.ssh_host }}</div>
+        <div class="mb-1 text-muted small">WP root: {{ cfg.new_server.wp_root }}</div>
+        <div id="new-wp-ver" class="text-muted small">WP-CLI: —</div>
+        <div id="new-msg" class="mt-2 small text-muted"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recent jobs -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Poslední běhy</strong>
+        <button class="btn btn-sm btn-outline-secondary" onclick="loadRecentJobs()">↻ Obnovit</button>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0" id="jobs-table">
+          <thead class="table-dark">
+            <tr>
+              <th>#</th><th>Typ</th><th>Režim</th><th>Status</th><th>Spuštěno</th><th>Trvání</th><th>Výsledek</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="jobs-tbody">
+            <tr><td colspan="8" class="text-center text-muted py-3">Načítám...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick help -->
+  <div class="col-12">
+    <div class="alert alert-info mb-0">
+      <strong>Postup synchronizace:</strong>
+      <ol class="mb-0 mt-1">
+        <li>Otestuj připojení k oběma serverům (musí být aktivní VPN pro starý server).</li>
+        <li><a href="/files">Soubory</a> — spočítej deltu uploadsů, potvrď přenos.</li>
+        <li><a href="/content">Obsah</a> — spočítej deltu databáze, zkontroluj seznam, potvrď přenos.</li>
+        <li>Volitelně: ověř Polylang vazby na stránce Obsahu.</li>
+        <li>Mazání (zrcadlení) provádí <strong>vždy až po samostatném potvrzení a záloze DB</strong>.</li>
+      </ol>
+    </div>
+  </div>
+
+</div>
+
+<script>
+async function testConnections() {
+  setStatus('old', 'testing', '...');
+  setStatus('new', 'testing', '...');
+  try {
+    const r = await fetch('/dashboard/test-connection');
+    const d = await r.json();
+    setStatus('old', d.old.ssh ? 'ok' : 'error', d.old.ssh_msg);
+    setStatus('new', d.new.ssh ? 'ok' : 'error', d.new.ssh_msg);
+    document.getElementById('old-wp-ver').textContent = 'WP-CLI: ' + d.old.wp_version;
+    document.getElementById('new-wp-ver').textContent = 'WP-CLI: ' + d.new.wp_version;
+    document.getElementById('old-msg').textContent = d.old.host;
+    document.getElementById('new-msg').textContent = d.new.host;
+  } catch(e) {
+    setStatus('old', 'error', e.message);
+    setStatus('new', 'error', e.message);
+  }
+}
+
+function setStatus(which, state, msg) {
+  const badge = document.getElementById(which + '-status-badge');
+  const card = document.getElementById('card-' + which);
+  const cls = state === 'ok' ? 'bg-success' : state === 'error' ? 'bg-danger' : 'bg-warning text-dark';
+  badge.className = 'badge ' + cls;
+  badge.textContent = state === 'ok' ? '● OK' : state === 'error' ? '✕ Chyba' : '⟳ Testuji...';
+}
+
+async function loadRecentJobs() {
+  const tbody = document.getElementById('jobs-tbody');
+  const r = await fetch('/dashboard/recent-jobs');
+  const jobs = await r.json();
+  if (!jobs.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">Žádné běhy zatím.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = jobs.map(j => {
+    const start = j.started_at ? new Date(j.started_at*1000).toLocaleString('cs') : '—';
+    const dur = j.finished_at && j.started_at
+      ? ((j.finished_at - j.started_at).toFixed(1) + 's')
+      : j.status === 'running' ? '⟳' : '—';
+    const statusCls = j.status === 'done' ? 'success' : j.status === 'running' ? 'primary' : j.status === 'error' ? 'danger' : 'secondary';
+    const summary = j.summary ? Object.entries(j.summary).map(([k,v]) => `${k}=${typeof v === 'object' ? '...' : v}`).join(', ') : '';
+    return `<tr>
+      <td>${j.id}</td>
+      <td>${j.job_type}</td>
+      <td><span class="badge ${j.mode === 'dry_run' ? 'bg-info text-dark' : j.mode === 'delete' ? 'bg-danger' : 'bg-success'}">${j.mode}</span></td>
+      <td><span class="badge bg-${statusCls}">${j.status}</span></td>
+      <td class="small">${start}</td>
+      <td class="small">${dur}</td>
+      <td class="small text-truncate" style="max-width:200px" title="${j.error_msg||summary}">${j.error_msg || summary}</td>
+      <td><a href="/logs?job_id=${j.id}" class="btn btn-xs btn-outline-secondary btn-sm py-0 px-1">Log</a></td>
+    </tr>`;
+  }).join('');
+}
+
+// Auto-load on page open
+testConnections();
+loadRecentJobs();
+</script>
+{% endblock %}

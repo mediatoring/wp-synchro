@@ -1,0 +1,40 @@
+profile: mysite
+
+old_server:
+  ssh_host: "user@old-server.example.com"
+  ssh_key: "~/.ssh/id_rsa_oldserver"        # optional, omit to use ssh-agent
+  wp_root: "/var/www/html/wordpress"
+  php_binary: "/usr/bin/php"                 # e.g. /usr/bin/php7.3 on older servers
+  wpcli_path: "~/wp.phar"                    # path to wp-cli phar or "wp" if in PATH
+  server_name_env: "cli"                     # SERVER_NAME env for wp-cli (often needed)
+  db_name: "wordpress_db"
+  table_prefix: "wp_"
+
+new_server:
+  ssh_host: "user@new-server.example.com"
+  ssh_key: "~/.ssh/id_ed25519_newserver"    # optional
+  wp_root: "~/public_html"
+  wpcli_binary: "wp"                         # wp-cli binary on new server
+
+# Directories to sync (old_server → new_server, via Mac as relay)
+sync_dirs:
+  - source: "wp-content/uploads"
+    dest: "wp-content/uploads"
+  # - source: "wp-content/themes/mytheme"
+  #   dest: "wp-content/themes/mytheme"
+
+# Post types to exclude from content sync (WP internal types)
+excluded_post_types:
+  - revision
+  - nav_menu_item
+  - custom_css
+  - customize_changeset
+  - oembed_cache
+  - user_request
+  - wp_block
+
+# Where to store the sync state DB and logs
+state_dir: "~/.wp-synchro/mysite"
+
+# Temporary directory for file relay (old → Mac → new)
+temp_dir: "/tmp/wp-synchro-transfer"

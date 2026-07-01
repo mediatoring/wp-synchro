@@ -1,0 +1,509 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-4">
+
+  <div class="col-12">
+    <div class="d-flex align-items-center gap-3 flex-wrap">
+      <h4 class="mb-0">Motor B — Obsah (databáze)</h4>
+      <span id="mode-indicator" class="badge bg-info fs-6 px-3">● DRY-RUN</span>
+      <div class="form-check form-switch ms-3 mb-0">
+        <input class="form-check-input" type="checkbox" id="live-mode" onchange="updateModeIndicator()">
+        <label class="form-check-label" for="live-mode">Ostrý režim (zápis)</label>
+      </div>
+    </div>
+    <div class="text-muted small mt-1">
+      Přenos přes WP-CLI — nikdy přímý SQL dump. Starý server = pouze čtení.
+    </div>
+  </div>
+
+  <!-- Post type selection -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Post types k synchronizaci</strong>
+        <div class="d-flex gap-2">
+          <button class="btn btn-sm btn-outline-secondary" onclick="selectAll(true)">Vše</button>
+          <button class="btn btn-sm btn-outline-secondary" onclick="selectAll(false)">Nic</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="d-flex flex-wrap gap-3" id="pt-checkboxes">
+          <span class="text-muted small" id="pt-loading">Načítám typy postů...</span>
+        </div>
+        {% if excluded_types %}
+        <div class="text-muted small mt-2">
+          Vyloučeno (systémové): {{ excluded_types | join(', ') }}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Action buttons -->
+  <div class="col-12">
+    <div class="d-flex gap-2 flex-wrap">
+      <button class="btn btn-primary" onclick="computeDelta()">
+        🔍 Spočítat deltu
+      </button>
+      <button class="btn btn-success" id="btn-sync" disabled onclick="confirmSync()">
+        ▶ Přidat + aktualizovat
+      </button>
+      <button class="btn btn-warning" id="btn-verify-pll" disabled onclick="verifyPolylang()">
+        🌍 Ověřit Polylang
+      </button>
+      <div class="ms-auto d-flex gap-2">
+        <button class="btn btn-secondary" onclick="backupDb()">
+          💾 Záloha DB
+        </button>
+        <button class="btn btn-danger" id="btn-delete" disabled onclick="confirmDelete()">
+          ⚠ Provést mazání (zrcadlení)
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Status bar -->
+  <div class="col-12" id="status-bar" style="display:none">
+    <div class="alert alert-info mb-0" id="status-msg">Pracuji...</div>
+  </div>
+
+  <!-- Operation result (above delta list) -->
+  <div class="col-12" id="result-section" style="display:none">
+    <div id="result-box"></div>
+  </div>
+
+  <!-- Delta results -->
+  <div class="col-12" id="delta-section" style="display:none">
+    <div id="delta-summary" class="alert mb-3"></div>
+    <div id="delta-tables"></div>
+  </div>
+
+  <!-- Polylang verification results -->
+  <div class="col-12" id="pll-section" style="display:none">
+    <div class="card border-primary">
+      <div class="card-header bg-primary text-white">Polylang verifikace</div>
+      <div class="card-body" id="pll-body"></div>
+    </div>
+  </div>
+
+
+</div>
+
+<!-- Confirm modal -->
+<div class="modal fade" id="confirmModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header" id="confirm-header">
+        <h5 class="modal-title" id="confirm-title">Potvrdit akci</h5>
+      </div>
+      <div class="modal-body" id="confirm-body"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Zrušit</button>
+        <button type="button" class="btn btn-danger" id="confirm-ok-btn">Provést</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Backup confirm modal -->
+<div class="modal fade" id="backupModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header bg-danger text-white">
+        <h5 class="modal-title">⚠ MAZÁNÍ — druhé potvrzení</h5>
+      </div>
+      <div class="modal-body">
+        <div class="alert alert-danger">
+          Tato akce přesune posty do <strong>koše</strong> na novém webu.<br>
+          Záloha DB byla právě vytvořena (job #<span id="backup-job-id">?</span>).
+        </div>
+        <p>Opravdu chcete smazat <strong id="delete-count">?</strong> postů z nového webu?</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Zrušit</button>
+        <button type="button" class="btn btn-danger" id="backup-confirm-ok">Ano, smazat</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let _deltaData = null;
+
+document.addEventListener('DOMContentLoaded', async () => {
+  // Load post types async (avoids blocking page render with SSH call)
+  try {
+    const r = await fetch('/content/post-types');
+    const types = await r.json();
+    const box = document.getElementById('pt-checkboxes');
+    box.innerHTML = types.map(pt =>
+      `<div class="form-check">
+        <input class="form-check-input pt-check" type="checkbox" value="${pt}" id="pt-${pt}" checked>
+        <label class="form-check-label" for="pt-${pt}">${pt}</label>
+      </div>`
+    ).join('');
+  } catch(e) {
+    document.getElementById('pt-loading').textContent = 'Chyba načítání typů: ' + e.message;
+  }
+  // Resume polling if a motor_b sync is already running
+  try {
+    const r = await fetch('/dashboard/recent-jobs');
+    const jobs = await r.json();
+    const running = jobs.find(j => j.job_type === 'motor_b' && j.status === 'running');
+    if (running) pollJobStatus(running.id);
+  } catch(e) { /* ignore */ }
+});
+let _lastBackupJobId = null;
+let _totalDeleteCount = 0;
+
+function updateModeIndicator() {
+  const live = document.getElementById('live-mode').checked;
+  const badge = document.getElementById('mode-indicator');
+  badge.textContent = live ? '⚡ OSTRÝ REŽIM' : '● DRY-RUN';
+  badge.className = 'badge fs-6 px-3 ' + (live ? 'bg-danger' : 'bg-info');
+  document.getElementById('mode-badge').textContent = live ? '⚡ OSTRÝ REŽIM' : '● DRY-RUN';
+  document.getElementById('mode-badge').className = 'badge fs-6 px-3 py-2 ' + (live ? 'bg-danger' : 'bg-info');
+}
+
+function selectAll(val) {
+  document.querySelectorAll('.pt-check').forEach(c => c.checked = val);
+}
+
+function getSelectedTypes() {
+  return Array.from(document.querySelectorAll('.pt-check:checked')).map(c => c.value);
+}
+
+function setStatus(msg, variant) {
+  const bar = document.getElementById('status-bar');
+  const el = document.getElementById('status-msg');
+  bar.style.display = '';
+  el.className = 'alert alert-' + (variant || 'info') + ' mb-0';
+  el.textContent = msg;
+}
+
+async function computeDelta() {
+  setStatus('⟳ Počítám deltu (čtení ze starého serveru)...', 'info');
+  try {
+    const types = getSelectedTypes();
+    const r = await fetch('/content/compute-delta', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: 'post_types_json=' + encodeURIComponent(JSON.stringify(types))
+    });
+    _deltaData = await r.json();
+    renderDelta(_deltaData);
+    document.getElementById('status-bar').style.display = 'none';
+  } catch(e) {
+    setStatus('❌ Chyba: ' + e.message, 'danger');
+  }
+}
+
+function renderDelta(data) {
+  const sec = document.getElementById('delta-section');
+  sec.style.display = '';
+
+  let totalNew = 0, totalMod = 0, totalDel = 0;
+  data.forEach(d => { totalNew += d.new_count; totalMod += d.modified_count; totalDel += d.deleted_count; });
+  _totalDeleteCount = totalDel;
+
+  const summary = document.getElementById('delta-summary');
+  const hasChanges = totalNew + totalMod > 0;
+  summary.className = 'alert ' + (hasChanges ? 'alert-warning' : 'alert-success');
+  summary.innerHTML = `<strong>Delta obsahu:</strong>
+    <span class="badge bg-success ms-2">${totalNew} nových postů</span>
+    <span class="badge bg-warning text-dark ms-1">${totalMod} změněných</span>
+    ${totalDel > 0 ? `<span class="badge bg-danger ms-1">${totalDel} smazaných (na starém)</span>` : ''}
+    &nbsp; Celkem ke zpracování: <strong>${totalNew + totalMod}</strong>`;
+
+  const tables = document.getElementById('delta-tables');
+  tables.innerHTML = data.map(d => `
+    <div class="card mb-3">
+      <div class="card-header"><strong>${d.post_type}</strong>
+        <span class="badge bg-success ms-2">${d.new_count} nových</span>
+        <span class="badge bg-warning text-dark ms-1">${d.modified_count} změněných</span>
+        ${d.deleted_count > 0 ? `<span class="badge bg-danger ms-1">${d.deleted_count} ke smazání</span>` : ''}
+      </div>
+      <div class="card-body p-0">
+        ${renderPostTable('Nové posty', d.new_posts, 'success', d.new_count)}
+        ${renderPostTable('Změněné posty', d.modified_posts, 'warning', d.modified_count)}
+        ${d.deleted_count > 0 ? renderPostTable('Smazané na starém', d.deleted_posts, 'danger', d.deleted_count) : ''}
+      </div>
+    </div>
+  `).join('');
+
+  document.getElementById('btn-sync').disabled = !hasChanges;
+  document.getElementById('btn-verify-pll').disabled = false;
+  document.getElementById('btn-delete').disabled = totalDel === 0;
+}
+
+function renderPostTable(title, posts, variant, total) {
+  if (!posts || !posts.length) return '';
+  const shown = posts.slice(0, 100);
+  const more = total - shown.length;
+  return `<div class="px-3 pt-2 pb-2">
+    <div class="fw-semibold text-${variant} mb-1">${title} (${total})</div>
+    <div class="table-responsive">
+    <table class="table table-sm table-hover">
+      <thead><tr><th>ID</th><th>Slug</th><th>Status</th><th>Jazyk</th><th>Změněno (starý)</th><th>Změněno (nový)</th></tr></thead>
+      <tbody>
+        ${shown.map(p => `<tr>
+          <td>${p.post_id}</td>
+          <td class="small"><code>${p.post_name||'—'}</code></td>
+          <td><span class="badge bg-secondary">${p.post_status||'—'}</span></td>
+          <td>${p.language ? `<span class="badge bg-primary">${p.language}</span>` : '—'}</td>
+          <td class="small text-muted">${p.old_modified||'—'}</td>
+          <td class="small text-muted">${p.new_modified||'—'}</td>
+        </tr>`).join('')}
+        ${more > 0 ? `<tr><td colspan="6" class="text-muted small text-center">... a dalších ${more}</td></tr>` : ''}
+      </tbody>
+    </table>
+    </div>
+  </div>`;
+}
+
+function confirmSync() {
+  const live = document.getElementById('live-mode').checked;
+  if (!live) {
+    doSync(true);
+    return;
+  }
+  let totalNew = 0, totalMod = 0;
+  if (_deltaData) _deltaData.forEach(d => { totalNew += d.new_count; totalMod += d.modified_count; });
+  showConfirm(
+    'Potvrdit synchronizaci obsahu',
+    'bg-warning',
+    `<div class="alert alert-warning">
+      <strong>OSTRÝ REŽIM:</strong> Bude zapsáno <strong>${totalNew}</strong> nových a
+      <strong>${totalMod}</strong> změněných postů na nový server.
+    </div>
+    <p>Polylang vazby budou rekonstruovány automaticky. Pokračovat?</p>`,
+    () => doSync(false)
+  );
+}
+
+let _pollInterval = null;
+
+async function doSync(dryRun) {
+  const types = getSelectedTypes();
+  setStatus(dryRun ? '⟳ Spouštím simulaci...' : '⟳ Spouštím synchronizaci...', 'info');
+  document.getElementById('result-section').style.display = 'none';
+  try {
+    const r = await fetch('/content/sync', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: 'post_types_json=' + encodeURIComponent(JSON.stringify(types))
+        + '&include_new=true&include_modified=true&dry_run=' + dryRun
+    });
+    const d = await r.json();
+    if (d.job_id) {
+      pollJobStatus(d.job_id, dryRun);
+    } else {
+      showResult(d);
+    }
+  } catch(e) {
+    setStatus('❌ Chyba: ' + e.message, 'danger');
+  }
+}
+
+function pollJobStatus(jobId, dryRun) {
+  if (_pollInterval) clearInterval(_pollInterval);
+  _pollInterval = setInterval(async () => {
+    try {
+      const r = await fetch('/content/job-status/' + jobId);
+      const d = await r.json();
+      renderJobProgress(jobId, d, dryRun);
+      if (d.status === 'done' || d.status === 'error' || d.status === 'unknown') {
+        clearInterval(_pollInterval);
+        _pollInterval = null;
+        if (d.status === 'done' && d.summary) {
+          showResult({job_id: jobId, ...d.summary});
+          const s = d.summary;
+          setStatus(dryRun
+            ? '✓ Simulace hotová — přepni do ostrého režimu a spusť znovu pro zápis.'
+            : `✓ Hotovo: ${s.total_ok} OK, ${s.total_error} chyb (job #${jobId})`,
+            (s.total_error || 0) > 0 ? 'warning' : 'success');
+        } else if (d.status === 'error') {
+          setStatus('❌ Chyba: ' + (d.error_msg || 'neznámá chyba'), 'danger');
+        }
+      }
+    } catch(e) { /* ignore transient errors */ }
+  }, 2000);
+}
+
+function renderJobProgress(jobId, d, dryRun) {
+  const sec = document.getElementById('result-section');
+  sec.style.display = '';
+  const logs = (d.logs || []).slice(-15);
+  const logHtml = logs.map(l => {
+    const t = new Date(l.ts * 1000).toLocaleTimeString('cs-CZ');
+    const cls = l.level === 'ERROR' ? 'text-danger' : (l.level === 'WARNING' ? 'text-warning' : 'text-light');
+    return `<div class="${cls} small">[${t}] ${l.message}</div>`;
+  }).join('');
+  const running = d.status === 'running';
+  document.getElementById('result-box').innerHTML = `
+    <div class="alert alert-secondary mb-0">
+      <div class="d-flex align-items-center gap-2 mb-2">
+        ${running ? '<span class="spinner-border spinner-border-sm"></span>' : ''}
+        <strong>Job #${jobId} — ${running ? (dryRun ? 'Simulace...' : 'Synchronizuji...') : 'Dokončeno'}</strong>
+        <a href="/logs" class="ms-auto btn btn-sm btn-outline-secondary">Logy</a>
+      </div>
+      <div class="border rounded p-2 bg-dark text-white" style="font-family:monospace;max-height:220px;overflow-y:auto">
+        ${logHtml || '<span class="text-muted">Čekám na první log...</span>'}
+      </div>
+    </div>`;
+  const logDiv = document.querySelector('#result-box .bg-dark');
+  if (logDiv) logDiv.scrollTop = logDiv.scrollHeight;
+}
+
+async function backupDb() {
+  setStatus('⟳ Vytvářím zálohu databáze nového serveru...', 'info');
+  try {
+    const r = await fetch('/content/backup-db', { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      _lastBackupJobId = d.job_id;
+      setStatus(`✓ Záloha vytvořena: ${d.path} (job #${d.job_id})`, 'success');
+    } else {
+      setStatus('❌ Záloha selhala: ' + d.error, 'danger');
+    }
+  } catch(e) {
+    setStatus('❌ Chyba: ' + e.message, 'danger');
+  }
+}
+
+function confirmDelete() {
+  if (!_lastBackupJobId) {
+    // Force backup first
+    showConfirm(
+      '⚠ Záloha DB je nutná',
+      'bg-warning',
+      '<div class="alert alert-warning">Před mazáním musí být vytvořena záloha databáze. Klikněte "Záloha DB" nejprve.</div>',
+      () => {}
+    );
+    return;
+  }
+  document.getElementById('backup-job-id').textContent = _lastBackupJobId;
+  document.getElementById('delete-count').textContent = _totalDeleteCount;
+  document.getElementById('backup-confirm-ok').onclick = async () => {
+    bootstrap.Modal.getInstance(document.getElementById('backupModal')).hide();
+    await doDelete();
+  };
+  new bootstrap.Modal(document.getElementById('backupModal')).show();
+}
+
+async function doDelete() {
+  const types = getSelectedTypes();
+  setStatus('⟳ Mažu posty z nového serveru (koš)...', 'warning');
+  try {
+    const r = await fetch('/content/delete-mirror', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: 'post_types_json=' + encodeURIComponent(JSON.stringify(types))
+        + '&backup_job_id=' + (_lastBackupJobId || 0)
+    });
+    const d = await r.json();
+    showResult(d);
+    setStatus(`✓ Smazáno do koše: ${d.trashed}, chyb: ${d.errors} (job #${d.job_id})`,
+      d.errors > 0 ? 'warning' : 'success');
+  } catch(e) {
+    setStatus('❌ ' + e.message, 'danger');
+  }
+}
+
+async function verifyPolylang() {
+  setStatus('⟳ Ověřuji Polylang jazyky a překlady...', 'info');
+  document.getElementById('pll-section').style.display = 'none';
+  try {
+    const r = await fetch('/content/verify-polylang', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: 'post_ids_json=[]'
+    });
+    const d = await r.json();
+    renderPolylang(d);
+    setStatus(`✓ Polylang: ${d.ok}/${d.total} OK, ${d.fail} neshod`, d.fail > 0 ? 'warning' : 'success');
+  } catch(e) {
+    setStatus('❌ ' + e.message, 'danger');
+  }
+}
+
+function renderPolylang(d) {
+  const sec = document.getElementById('pll-section');
+  sec.style.display = '';
+  const body = document.getElementById('pll-body');
+  if (d.error) {
+    body.innerHTML = `<div class="alert alert-warning">${d.error}</div>`;
+    return;
+  }
+  let html = `<div class="mb-3">
+    <span class="badge bg-success fs-6">${d.ok} OK</span>
+    <span class="badge bg-danger fs-6 ms-2">${d.fail} neshod</span>
+    <span class="text-muted ms-2">z ${d.total} ověřených postů</span>
+  </div>`;
+  if (d.mismatches && d.mismatches.length > 0) {
+    html += `<table class="table table-sm table-danger">
+      <thead><tr><th>Post ID</th><th>Očekávaný jazyk</th><th>Skutečný jazyk</th><th>Očekávané překlady</th><th>Skutečné překlady</th></tr></thead>
+      <tbody>
+        ${d.mismatches.map(m => `<tr>
+          <td>${m.post_id}</td>
+          <td>${m.expected_lang||'—'}</td>
+          <td>${m.actual_lang||'—'}</td>
+          <td class="small"><code>${JSON.stringify(m.expected_translations)}</code></td>
+          <td class="small"><code>${JSON.stringify(m.actual_translations)}</code></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+  }
+  body.innerHTML = html;
+}
+
+function showResult(data) {
+  const sec = document.getElementById('result-section');
+  sec.style.display = '';
+  sec.scrollIntoView({behavior: 'smooth', block: 'start'});
+  const box = document.getElementById('result-box');
+  if (data.error) {
+    box.innerHTML = `<div class="alert alert-danger mb-0">Chyba: ${data.error}</div>`;
+    return;
+  }
+  const dryRun = data.dry_run;
+  const perType = data.per_type || [];
+  const totalOk = data.total_ok ?? 0;
+  const totalErr = data.total_error ?? 0;
+  const rows = perType.map(r => `
+    <tr>
+      <td><code>${r.post_type}</code></td>
+      <td class="text-center">${r.ok ?? (r.skipped ?? '—')}</td>
+      <td class="text-center text-danger">${r.error || 0}</td>
+    </tr>`).join('');
+  const variant = totalErr ? 'danger' : (dryRun ? 'info' : 'success');
+  const icon = totalErr ? '❌' : (dryRun ? '🔍' : '✅');
+  box.innerHTML = `
+    <div class="alert alert-${variant} mb-0">
+      <div class="d-flex align-items-center gap-3 flex-wrap mb-2">
+        <span class="fs-5">${icon} ${dryRun ? 'Simulace (DRY-RUN)' : 'Synchronizace dokoncena'}</span>
+        <span class="badge bg-success">✓ ${totalOk} OK</span>
+        ${totalErr ? `<span class="badge bg-danger">✗ ${totalErr} chyb</span>` : ''}
+        ${data.job_id ? `<a href="/logs" class="ms-auto btn btn-sm btn-outline-secondary">Log #${data.job_id}</a>` : ''}
+      </div>
+      ${rows ? `<table class="table table-sm mb-0 table-bordered bg-white">
+        <thead><tr><th>Post type</th><th class="text-center">${dryRun ? 'Přeskočeno' : 'Přeneseno'}</th><th class="text-center">Chyby</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>` : ''}
+    </div>`;
+}
+
+let _confirmCallback = null;
+function showConfirm(title, headerCls, body, cb) {
+  document.getElementById('confirm-title').textContent = title;
+  document.getElementById('confirm-header').className = 'modal-header ' + headerCls;
+  document.getElementById('confirm-body').innerHTML = body;
+  _confirmCallback = cb;
+  document.getElementById('confirm-ok-btn').onclick = () => {
+    bootstrap.Modal.getInstance(document.getElementById('confirmModal')).hide();
+    cb();
+  };
+  new bootstrap.Modal(document.getElementById('confirmModal')).show();
+}
+</script>
+{% endblock %}

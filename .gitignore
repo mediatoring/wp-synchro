@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Site-specific configs (keep example.yaml, ignore everything else)
+configs/*.yaml
+!configs/example.yaml
+
+# Runtime state
+*.db
+*.db-shm
+*.db-wal
+~/.wp-synchro/
+
+# Temp files
+/tmp/
+*.log
+
+# OS
+.DS_Store
+.idea/
+.vscode/

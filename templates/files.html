@@ -1,0 +1,349 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-4">
+
+  <div class="col-12">
+    <div class="d-flex align-items-center gap-3 flex-wrap">
+      <h4 class="mb-0">Motor A — Soubory</h4>
+      <span id="mode-indicator" class="badge bg-info fs-6 px-3">● DRY-RUN</span>
+      <div class="form-check form-switch ms-3 mb-0">
+        <input class="form-check-input" type="checkbox" id="live-mode" onchange="updateModeIndicator()">
+        <label class="form-check-label" for="live-mode">Ostrý režim (zápis)</label>
+      </div>
+      <div class="form-check ms-3 mb-0">
+        <input class="form-check-input" type="checkbox" id="include-deletes">
+        <label class="form-check-label" for="include-deletes">Zahrnout mazání (zrcadlení)</label>
+      </div>
+    </div>
+    <div class="text-muted small mt-1">
+      Synchronizuje soubory přes Mac jako mezičlánek (starý server → Mac → nový server).
+    </div>
+  </div>
+
+  <!-- Sync dirs overview -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">Synchronizované adresáře</div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <thead class="table-dark"><tr><th>#</th><th>Zdrojový adresář (starý)</th><th>Cílový adresář (nový)</th></tr></thead>
+          <tbody>
+            {% for sd in sync_dirs %}
+            <tr>
+              <td>{{ loop.index0 }}</td>
+              <td><code>{{ cfg.old_server.wp_root }}/{{ sd.source }}</code></td>
+              <td><code>{{ cfg.new_server.wp_root }}/{{ sd.dest }}</code></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Action buttons -->
+  <div class="col-12">
+    <div class="d-flex gap-2 flex-wrap">
+      <button class="btn btn-primary" onclick="computeDelta()">
+        🔍 Spočítat deltu (dry-run)
+      </button>
+      <button class="btn btn-success" id="btn-sync" disabled onclick="confirmSync()">
+        ▶ Synchronizovat soubory
+      </button>
+      <button class="btn btn-danger ms-auto" id="btn-delete" disabled onclick="confirmDelete()" style="display:none!important" id="btn-delete-wrap">
+        ⚠ Provést zrcadlení (mazání)
+      </button>
+    </div>
+  </div>
+
+  <!-- Result (shown ABOVE delta list) -->
+  <div class="col-12" id="result-section" style="display:none">
+    <div id="result-box"></div>
+  </div>
+
+  <!-- Delta results -->
+  <div class="col-12" id="delta-section" style="display:none">
+    <div id="delta-summary" class="alert mb-3"></div>
+    <div id="delta-tables"></div>
+  </div>
+
+</div>
+
+<!-- Confirm modal -->
+<div class="modal fade" id="confirmModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header bg-warning">
+        <h5 class="modal-title" id="confirm-title">Potvrdit akci</h5>
+      </div>
+      <div class="modal-body" id="confirm-body"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Zrušit</button>
+        <button type="button" class="btn btn-danger" id="confirm-ok-btn">Provést</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let _deltaData = null;
+
+// On page load: resume polling if a motor_a sync is already running
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    const r = await fetch('/dashboard/recent-jobs');
+    const jobs = await r.json();
+    const running = jobs.find(j => j.job_type === 'motor_a' && j.status === 'running');
+    if (running) {
+      pollJobStatus(running.id);
+    }
+  } catch(e) { /* ignore */ }
+});
+
+function updateModeIndicator() {
+  const live = document.getElementById('live-mode').checked;
+  const badge = document.getElementById('mode-indicator');
+  badge.textContent = live ? '⚡ OSTRÝ REŽIM' : '● DRY-RUN';
+  badge.className = 'badge fs-6 px-3 ' + (live ? 'bg-danger' : 'bg-info');
+  document.getElementById('mode-badge').textContent = live ? '⚡ OSTRÝ REŽIM' : '● DRY-RUN';
+  document.getElementById('mode-badge').className = 'badge fs-6 px-3 py-2 ' + (live ? 'bg-danger' : 'bg-info');
+}
+
+async function computeDelta() {
+  const incDel = document.getElementById('include-deletes').checked;
+  setLoading(true, 'Počítám deltu (dry-run rsync)...');
+  try {
+    const r = await fetch('/files/compute-delta', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: 'include_deletes=' + incDel
+    });
+    _deltaData = await r.json();
+    renderDelta(_deltaData);
+  } catch(e) {
+    showError('Chyba: ' + e.message);
+  } finally {
+    setLoading(false);
+  }
+}
+
+function renderDelta(data) {
+  const sec = document.getElementById('delta-section');
+  sec.style.display = '';
+
+  let totalNew = 0, totalMod = 0, totalDel = 0;
+  data.forEach(d => { totalNew += d.new_count; totalMod += d.modified_count; totalDel += d.deleted_count; });
+
+  const summary = document.getElementById('delta-summary');
+  summary.className = 'alert ' + (totalNew + totalMod > 0 ? 'alert-warning' : 'alert-success');
+  summary.innerHTML = `<strong>Delta:</strong>
+    <span class="badge bg-success ms-2">${totalNew} nových</span>
+    <span class="badge bg-warning text-dark ms-1">${totalMod} změněných</span>
+    ${totalDel > 0 ? `<span class="badge bg-danger ms-1">${totalDel} ke smazání</span>` : ''}
+    &nbsp; Celkem změn k přenosu: <strong>${totalNew + totalMod}</strong>`;
+
+  const tables = document.getElementById('delta-tables');
+  tables.innerHTML = data.map(d => `
+    <div class="card mb-3">
+      <div class="card-header"><strong>${d.source}</strong> → <code>${d.dest}</code></div>
+      <div class="card-body p-0">
+        ${renderFileTable('Nové soubory', d.new_files, 'success', d.new_count)}
+        ${renderFileTable('Změněné soubory', d.modified_files, 'warning', d.modified_count)}
+        ${d.deleted_count > 0 ? renderFileTable('Ke smazání (zrcadlení)', d.deleted_files, 'danger', d.deleted_count) : ''}
+      </div>
+    </div>
+  `).join('');
+
+  // Enable sync button if there are changes
+  document.getElementById('btn-sync').disabled = (totalNew + totalMod === 0);
+
+  // Show delete button if deletes included
+  const btnDel = document.getElementById('btn-delete');
+  if (totalDel > 0) {
+    btnDel.style.removeProperty('display');
+    btnDel.disabled = false;
+  }
+}
+
+function renderFileTable(title, files, variant, total) {
+  if (!files || !files.length) return '';
+  const shown = files.slice(0, 50);
+  const more = total - shown.length;
+  return `<div class="px-3 pt-2">
+    <div class="fw-semibold text-${variant} mb-1">${title} (${total})</div>
+    <table class="table table-sm table-hover">
+      <thead><tr><th>Cesta</th><th class="text-end">Velikost</th></tr></thead>
+      <tbody>
+        ${shown.map(f => `<tr><td class="small"><code>${f.path}</code></td><td class="text-end small">${f.size ? (f.size/1024).toFixed(1)+'KB' : '—'}</td></tr>`).join('')}
+        ${more > 0 ? `<tr><td colspan="2" class="text-muted small text-center">... a dalších ${more}</td></tr>` : ''}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function confirmSync() {
+  const live = document.getElementById('live-mode').checked;
+  if (!live) {
+    doSync(true);
+    return;
+  }
+  showConfirm(
+    'Potvrdit přenos souborů',
+    '<div class="alert alert-danger">Probíhá přenos v <strong>OSTRÉM REŽIMU</strong>. Soubory budou zkopírovány na nový server.</div>' +
+    '<p>Pokračovat?</p>',
+    () => doSync(false)
+  );
+}
+
+async function doSync(dryRun) {
+  setLoading(true, dryRun ? 'Spouštím simulaci...' : 'Spouštím přenos...');
+  try {
+    const r = await fetch('/files/sync', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: 'dry_run=' + dryRun
+    });
+    const d = await r.json();
+    if (d.job_id) {
+      pollJobStatus(d.job_id);
+    } else {
+      showResult(d);
+    }
+  } catch(e) {
+    showError('Chyba: ' + e.message);
+  }
+}
+
+let _pollInterval = null;
+async function pollJobStatus(jobId) {
+  if (_pollInterval) clearInterval(_pollInterval);
+  _pollInterval = setInterval(async () => {
+    try {
+      const r = await fetch('/files/job-status/' + jobId);
+      const d = await r.json();
+      renderJobProgress(jobId, d);
+      if (d.status === 'done' || d.status === 'error' || d.status === 'unknown') {
+        clearInterval(_pollInterval);
+        _pollInterval = null;
+        if (d.status === 'done') showResult({job_id: jobId, ...(d.summary || {}), dry_run: (d.summary||{}).dry_run});
+      }
+    } catch(e) { /* ignore transient network errors during polling */ }
+  }, 2000);
+}
+
+function renderJobProgress(jobId, d) {
+  const sec = document.getElementById('result-section');
+  sec.style.display = '';
+  const logs = (d.logs || []).slice(-15);
+  const logHtml = logs.map(l => {
+    const t = new Date(l.ts * 1000).toLocaleTimeString('cs-CZ');
+    const cls = l.level === 'ERROR' ? 'text-danger' : (l.level === 'WARNING' ? 'text-warning' : 'text-light');
+    return `<div class="${cls} small">[${t}] ${l.message}</div>`;
+  }).join('');
+  const running = d.status === 'running';
+  document.getElementById('result-box').innerHTML = `
+    <div class="alert alert-secondary mb-0">
+      <div class="d-flex align-items-center gap-2 mb-2">
+        ${running ? '<span class="spinner-border spinner-border-sm"></span>' : ''}
+        <strong>Job #${jobId} — ${running ? 'Probíhá přenos...' : 'Dokončeno'}</strong>
+        <a href="/logs" class="ms-auto btn btn-sm btn-outline-secondary">Logy</a>
+      </div>
+      <div class="log-box border rounded p-2 bg-dark text-white" style="font-family:monospace;max-height:220px;overflow-y:auto">
+        ${logHtml || '<span class="text-secondary">Čekám na první log...</span>'}
+      </div>
+    </div>`;
+  const logDiv = document.querySelector('#result-box .log-box');
+  if (logDiv) logDiv.scrollTop = logDiv.scrollHeight;
+}
+
+function confirmDelete() {
+  showConfirm(
+    '⚠ Zrcadlení — SMAZÁNÍ SOUBORŮ',
+    '<div class="alert alert-danger"><strong>POZOR:</strong> Tato akce smaže soubory z nového serveru, které již neexistují na starém. Nejprve musíte provést zálohu DB.</div>' +
+    '<p>Nejprve bude vytvořena záloha databáze nového webu. Pokračovat?</p>',
+    async () => {
+      // First backup DB
+      const br = await fetch('/content/backup-db', { method: 'POST' });
+      const bd = await br.json();
+      if (!bd.ok) {
+        showError('Záloha DB selhala: ' + bd.error); return;
+      }
+      // Then delete
+      const dr = await fetch('/files/delete-mirror', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'sync_dir_index=0&backup_confirmed=true'
+      });
+      showResult(await dr.json());
+    }
+  );
+}
+
+let _confirmCallback = null;
+function showConfirm(title, body, cb) {
+  document.getElementById('confirm-title').textContent = title;
+  document.getElementById('confirm-body').innerHTML = body;
+  _confirmCallback = cb;
+  document.getElementById('confirm-ok-btn').onclick = () => {
+    bootstrap.Modal.getInstance(document.getElementById('confirmModal')).hide();
+    cb();
+  };
+  new bootstrap.Modal(document.getElementById('confirmModal')).show();
+}
+
+function showResult(data) {
+  const sec = document.getElementById('result-section');
+  sec.style.display = '';
+  sec.scrollIntoView({behavior: 'smooth', block: 'start'});
+  const box = document.getElementById('result-box');
+  if (data.error) { showError(data.error); return; }
+  const dryRun = data.dry_run;
+  const dirs = data.dirs || [];
+  const totalNew = dirs.reduce((s, d) => s + (d.uploaded_new || 0), 0);
+  const totalMod = dirs.reduce((s, d) => s + (d.uploaded_modified || 0), 0);
+  const totalErr = dirs.reduce((s, d) => s + (d.error ? 1 : 0), 0);
+  const rows = dirs.map(d => `
+    <tr>
+      <td><code>${d.source || '—'}</code></td>
+      <td class="text-center">${d.uploaded_new ?? '—'}</td>
+      <td class="text-center">${d.uploaded_modified ?? '—'}</td>
+      <td class="text-center">${d.error ? '<span class="text-danger">'+d.error+'</span>' : '<span class="text-success">OK</span>'}</td>
+    </tr>`).join('');
+  box.innerHTML = `
+    <div class="alert ${totalErr ? 'alert-danger' : (dryRun ? 'alert-info' : 'alert-success')} mb-0">
+      <div class="d-flex align-items-center gap-3 flex-wrap">
+        <span class="fs-5">${dryRun ? 'Výsledek simulace (DRY-RUN)' : 'Synchronizace dokoncena'}</span>
+        <span class="badge bg-success">+${totalNew} nových</span>
+        <span class="badge bg-warning text-dark">~${totalMod} aktualizovaných</span>
+        ${totalErr ? `<span class="badge bg-danger">${totalErr} chyb</span>` : ''}
+        ${data.job_id ? `<a href="/logs" class="ms-auto btn btn-sm btn-outline-secondary">Log #${data.job_id}</a>` : ''}
+      </div>
+      ${rows ? `<table class="table table-sm mt-3 mb-0 table-bordered bg-white">
+        <thead><tr><th>Adresář</th><th class="text-center">Nových</th><th class="text-center">Aktualizovaných</th><th class="text-center">Stav</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>` : ''}
+    </div>`;
+}
+
+function showError(msg) {
+  const sec = document.getElementById('result-section');
+  sec.style.display = '';
+  sec.scrollIntoView({behavior: 'smooth', block: 'start'});
+  document.getElementById('result-box').innerHTML =
+    `<div class="alert alert-danger mb-0">Chyba: ${msg}</div>`;
+}
+
+function setLoading(on, msg) {
+  const sec = document.getElementById('result-section');
+  if (on) {
+    sec.style.display = '';
+    sec.scrollIntoView({behavior: 'smooth', block: 'start'});
+    document.getElementById('result-box').innerHTML =
+      `<div class="alert alert-secondary mb-0"><span class="spinner-border spinner-border-sm me-2"></span>${msg || 'Pracuji...'}</div>`;
+  } else {
+    sec.style.display = 'none';
+    document.getElementById('result-box').innerHTML = '';
+  }
+}
+</script>
+{% endblock %}
