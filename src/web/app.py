@@ -102,12 +102,13 @@ _jinja_env.filters["fmt_ts"] = _fmt_ts
 # Routes — import here to register them
 # ---------------------------------------------------------------------------
 
-from .routes import dashboard, files, content, logs  # noqa: E402, F401
+from .routes import dashboard, files, content, logs, database  # noqa: E402, F401
 
 app.include_router(dashboard.router)
 app.include_router(files.router)
 app.include_router(content.router)
 app.include_router(logs.router)
+app.include_router(database.router)
 
 
 @app.get("/", response_class=HTMLResponse)

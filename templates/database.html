@@ -1,0 +1,323 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-4">
+
+  <div class="col-12">
+    <h4 class="mb-0">Database — starý server</h4>
+    <div class="text-muted small mt-1">Jen pro čtení. Veškeré dotazy jsou SELECT / SHOW / DESCRIBE.</div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="col-12">
+    <ul class="nav nav-tabs" id="dbTabs">
+      <li class="nav-item">
+        <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-missing">
+          Chybějící / zastaralé posty
+        </button>
+      </li>
+      <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-browser"
+          onclick="loadTables()">
+          Prohlížeč tabulek
+        </button>
+      </li>
+    </ul>
+
+    <div class="tab-content pt-3">
+
+      <!-- ========================================================= -->
+      <!-- TAB 1: Missing / outdated posts                           -->
+      <!-- ========================================================= -->
+      <div class="tab-pane fade show active" id="tab-missing">
+
+        <div class="d-flex gap-2 align-items-center flex-wrap mb-3">
+          <input type="text" class="form-control" id="search-input" placeholder="Hledat dle titulku nebo slugu…" style="max-width:380px"
+            onkeydown="if(event.key==='Enter') loadMissing()">
+          <button class="btn btn-primary" onclick="loadMissing()">🔍 Porovnat</button>
+          <span class="text-muted small ms-2">Porovná všechny posty na starém a novém serveru</span>
+        </div>
+
+        <div id="missing-loading" style="display:none">
+          <span class="spinner-border spinner-border-sm me-2"></span>Načítám posty z obou serverů…
+        </div>
+
+        <div id="missing-result" style="display:none">
+
+          <div class="row g-3 mb-3" id="missing-stats"></div>
+
+          <!-- Missing posts -->
+          <div id="missing-section" style="display:none">
+            <h6 class="text-danger mt-3">
+              ❌ Chybí na novém serveru
+              <span class="badge bg-danger ms-1" id="missing-count">0</span>
+            </h6>
+            <div class="table-responsive">
+              <table class="table table-sm table-hover table-bordered">
+                <thead class="table-dark">
+                  <tr>
+                    <th>ID</th>
+                    <th>Typ</th>
+                    <th>Titulek</th>
+                    <th>Slug</th>
+                    <th>Status</th>
+                    <th>Změněno (starý)</th>
+                  </tr>
+                </thead>
+                <tbody id="missing-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Outdated posts -->
+          <div id="outdated-section" style="display:none">
+            <h6 class="text-warning mt-3">
+              ⚠ Starší verze na novém serveru
+              <span class="badge bg-warning text-dark ms-1" id="outdated-count">0</span>
+            </h6>
+            <div class="table-responsive">
+              <table class="table table-sm table-hover table-bordered">
+                <thead class="table-dark">
+                  <tr>
+                    <th>ID</th>
+                    <th>Typ</th>
+                    <th>Titulek</th>
+                    <th>Slug</th>
+                    <th>Změněno (starý)</th>
+                    <th>Změněno (nový)</th>
+                  </tr>
+                </thead>
+                <tbody id="outdated-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="all-ok-msg" class="alert alert-success" style="display:none">
+            ✅ Vše synchronizováno — žádné chybějící ani zastaralé posty.
+          </div>
+
+        </div><!-- /missing-result -->
+      </div><!-- /tab-missing -->
+
+      <!-- ========================================================= -->
+      <!-- TAB 2: Table browser                                       -->
+      <!-- ========================================================= -->
+      <div class="tab-pane fade" id="tab-browser">
+        <div class="row g-3">
+
+          <!-- Table list -->
+          <div class="col-12 col-md-3">
+            <div class="card">
+              <div class="card-header d-flex align-items-center gap-2">
+                Tabulky
+                <span class="spinner-border spinner-border-sm ms-auto" id="tables-spinner"></span>
+              </div>
+              <div class="list-group list-group-flush" id="table-list" style="max-height:70vh;overflow-y:auto">
+                <span class="list-group-item text-muted small">Načítám…</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Table content -->
+          <div class="col-12 col-md-9">
+            <div id="table-content">
+              <div class="text-muted p-3">Vyber tabulku vlevo.</div>
+            </div>
+          </div>
+
+        </div><!-- /row -->
+      </div><!-- /tab-browser -->
+
+    </div><!-- /tab-content -->
+  </div>
+
+</div><!-- /row -->
+
+<script>
+// ============================================================
+// Tab 1 — Missing / outdated posts
+// ============================================================
+
+async function loadMissing() {
+  const q = document.getElementById('search-input').value.trim();
+  document.getElementById('missing-loading').style.display = '';
+  document.getElementById('missing-result').style.display = 'none';
+
+  try {
+    const r = await fetch('/database/missing-posts' + (q ? '?search=' + encodeURIComponent(q) : ''));
+    const d = await r.json();
+
+    if (d.old_error || d.new_error) {
+      alert('Chyba při načítání:\n' + (d.old_error || '') + '\n' + (d.new_error || ''));
+    }
+
+    // Stats badges
+    document.getElementById('missing-stats').innerHTML = `
+      <div class="col-auto">
+        <div class="card text-center px-4 py-2">
+          <div class="fs-4 fw-bold">${d.total_old}</div>
+          <div class="text-muted small">postů na starém</div>
+        </div>
+      </div>
+      <div class="col-auto">
+        <div class="card text-center px-4 py-2">
+          <div class="fs-4 fw-bold">${d.total_new}</div>
+          <div class="text-muted small">postů na novém</div>
+        </div>
+      </div>
+      <div class="col-auto">
+        <div class="card text-center px-4 py-2 border-danger">
+          <div class="fs-4 fw-bold text-danger">${d.missing_count}</div>
+          <div class="text-muted small">chybí</div>
+        </div>
+      </div>
+      <div class="col-auto">
+        <div class="card text-center px-4 py-2 border-warning">
+          <div class="fs-4 fw-bold text-warning">${d.outdated_count}</div>
+          <div class="text-muted small">zastaralých</div>
+        </div>
+      </div>`;
+
+    // Missing
+    const missingSec = document.getElementById('missing-section');
+    if (d.missing && d.missing.length > 0) {
+      document.getElementById('missing-count').textContent = d.missing_count;
+      document.getElementById('missing-tbody').innerHTML = d.missing.map(p => `
+        <tr>
+          <td class="text-end">${p.ID}</td>
+          <td><span class="badge bg-secondary">${p.post_type}</span></td>
+          <td>${esc(p.post_title)}</td>
+          <td><small class="text-muted"><code>${esc(p.post_name)}</code></small></td>
+          <td><span class="badge bg-${statusColor(p.post_status)}">${p.post_status}</span></td>
+          <td><small>${p.post_modified}</small></td>
+        </tr>`).join('');
+      missingSec.style.display = '';
+    } else {
+      missingSec.style.display = 'none';
+    }
+
+    // Outdated
+    const outdatedSec = document.getElementById('outdated-section');
+    if (d.outdated && d.outdated.length > 0) {
+      document.getElementById('outdated-count').textContent = d.outdated_count;
+      document.getElementById('outdated-tbody').innerHTML = d.outdated.map(p => `
+        <tr>
+          <td class="text-end">${p.ID}</td>
+          <td><span class="badge bg-secondary">${p.post_type}</span></td>
+          <td>${esc(p.post_title)}</td>
+          <td><small><code>${esc(p.post_name)}</code></small></td>
+          <td><small>${p.post_modified}</small></td>
+          <td><small class="text-danger">${p.new_modified}</small></td>
+        </tr>`).join('');
+      outdatedSec.style.display = '';
+    } else {
+      outdatedSec.style.display = 'none';
+    }
+
+    const allOk = document.getElementById('all-ok-msg');
+    allOk.style.display = (d.missing_count === 0 && d.outdated_count === 0) ? '' : 'none';
+
+    document.getElementById('missing-result').style.display = '';
+  } catch(ex) {
+    alert('Chyba: ' + ex.message);
+  } finally {
+    document.getElementById('missing-loading').style.display = 'none';
+  }
+}
+
+function statusColor(s) {
+  if (s === 'publish') return 'success';
+  if (s === 'draft') return 'secondary';
+  if (s === 'private') return 'warning';
+  return 'light text-dark';
+}
+
+function esc(s) {
+  return String(s || '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ============================================================
+// Tab 2 — Table browser
+// ============================================================
+
+let _tablesLoaded = false;
+let _currentTable = null;
+let _currentOffset = 0;
+const _PAGE = 50;
+
+async function loadTables() {
+  if (_tablesLoaded) return;
+  _tablesLoaded = true;
+  try {
+    const r = await fetch('/database/tables');
+    const d = await r.json();
+    const el = document.getElementById('table-list');
+    if (d.error) {
+      el.innerHTML = `<span class="list-group-item text-danger small">${esc(d.error)}</span>`;
+    } else {
+      el.innerHTML = d.tables.map(t => `
+        <button class="list-group-item list-group-item-action small py-1"
+          onclick="browseTable('${t}', 0)">${t}</button>`).join('');
+    }
+  } catch(ex) {
+    document.getElementById('table-list').innerHTML =
+      `<span class="list-group-item text-danger small">Chyba: ${ex.message}</span>`;
+  } finally {
+    document.getElementById('tables-spinner').style.display = 'none';
+  }
+}
+
+async function browseTable(table, offset) {
+  _currentTable = table;
+  _currentOffset = offset;
+
+  // Highlight active
+  document.querySelectorAll('#table-list button').forEach(b => {
+    b.classList.toggle('active', b.textContent.trim() === table);
+  });
+
+  const el = document.getElementById('table-content');
+  el.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Načítám…';
+
+  try {
+    const fd = new FormData();
+    fd.append('table', table);
+    fd.append('offset', offset);
+    fd.append('limit', _PAGE);
+    const r = await fetch('/database/browse', { method: 'POST', body: fd });
+    const d = await r.json();
+
+    if (d.error) { el.innerHTML = `<div class="alert alert-danger">${esc(d.error)}</div>`; return; }
+
+    const totalPages = Math.ceil(d.total / _PAGE);
+    const curPage = Math.floor(offset / _PAGE) + 1;
+
+    const colHtml = (d.columns || []).map(c => `<th>${esc(c)}</th>`).join('');
+    const rowHtml = (d.rows || []).map(row =>
+      '<tr>' + row.map(cell => `<td class="small text-truncate" style="max-width:200px" title="${esc(cell)}">${esc(cell)}</td>`).join('') + '</tr>'
+    ).join('');
+
+    el.innerHTML = `
+      <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
+        <strong>${table}</strong>
+        <span class="text-muted small">${d.total.toLocaleString('cs-CZ')} řádků</span>
+        <span class="ms-auto d-flex gap-1">
+          <button class="btn btn-sm btn-outline-secondary" onclick="browseTable('${table}', ${Math.max(0, offset - _PAGE)})"
+            ${offset === 0 ? 'disabled' : ''}>‹ Předchozí</button>
+          <span class="btn btn-sm btn-outline-secondary disabled">${curPage} / ${totalPages}</span>
+          <button class="btn btn-sm btn-outline-secondary" onclick="browseTable('${table}', ${offset + _PAGE})"
+            ${offset + _PAGE >= d.total ? 'disabled' : ''}>Další ›</button>
+        </span>
+      </div>
+      <div class="table-responsive" style="max-height:65vh;overflow:auto">
+        <table class="table table-sm table-hover table-bordered table-striped mb-0" style="font-size:.8rem">
+          <thead class="table-dark sticky-top"><tr>${colHtml}</tr></thead>
+          <tbody>${rowHtml}</tbody>
+        </table>
+      </div>`;
+  } catch(ex) {
+    el.innerHTML = `<div class="alert alert-danger">Chyba: ${esc(ex.message)}</div>`;
+  }
+}
+</script>
+{% endblock %}
