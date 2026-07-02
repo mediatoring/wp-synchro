@@ -41,6 +41,9 @@ class SyncConfig(BaseModel):
         "revision", "nav_menu_item", "custom_css",
         "customize_changeset", "oembed_cache", "user_request", "wp_block",
     ])
+    # CPTs registered by the theme (hidden when --skip-themes is passed to WP-CLI).
+    # List them here so Motor B includes them even when post-type list misses them.
+    extra_post_types: List[str] = Field(default_factory=list)
     batch_limit: int = 50
     state_dir: str = "~/.wp-synchro"
     temp_dir: str = "/tmp/wp-synchro-transfer"

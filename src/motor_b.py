@@ -96,10 +96,18 @@ class MotorB:
     # -- Post type resolution ------------------------------------------------
 
     def get_active_post_types(self) -> List[str]:
-        """All post types on old server minus the excluded list."""
+        """
+        All post types on old server minus the excluded list, plus any
+        extra_post_types from config (theme-registered CPTs hidden by --skip-themes).
+        """
         all_types = self.old.get_post_types()
         excluded = set(self.cfg.excluded_post_types)
-        return [t for t in all_types if t not in excluded]
+        discovered = [t for t in all_types if t not in excluded]
+        # Merge extra CPTs that WP-CLI post-type list misses due to --skip-themes
+        for pt in self.cfg.extra_post_types:
+            if pt not in excluded and pt not in discovered:
+                discovered.append(pt)
+        return discovered
 
     # -- Delta detection -----------------------------------------------------
 
